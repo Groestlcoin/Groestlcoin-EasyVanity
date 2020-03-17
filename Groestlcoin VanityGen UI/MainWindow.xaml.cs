@@ -2,11 +2,13 @@
 using MaterialDesignThemes.Wpf;
 using Microsoft.Win32;
 using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Net.NetworkInformation;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
@@ -62,12 +64,14 @@ namespace Groestlcoin_VanityGen_UI {
             DialogNoPrompt = new CommandImplementation(OnNoDialogClick);
 
             //Check if the PC is connected to the internet, and show a warning if it is.
+#if !DEBUG
             if (NetworkInterface.GetIsNetworkAvailable()) {
                 ShowStartDialog("This machine is currently connected to the internet! We would not advise creating or storing Groestlcoin wallets on a machine which is connected to the internet as it poses a risk\n\nAlthough we advise users to use the Generator offline we do allow the application to be run whilst connected to the internet.\n\nWould you like to continue?");
             }
             else {
                 DialogHelper.ShowOKDialog(DH, "Online Status: Offline");
             }
+
 
             CpuTimer.Interval = new TimeSpan(0, 0, 0, 0, 1024);
             CpuTimer.IsEnabled = true;
@@ -76,7 +80,7 @@ namespace Groestlcoin_VanityGen_UI {
                 var counterPercent = Convert.ToInt32(CpuCounter.NextValue());
                 uxCPULbl.Text = counterPercent + "%";
             };
-
+#endif
             Titlebar.Clicked += (sender, args) => ThemeSelector.ThemeSelector.SetCurrentThemeDictionary(this, new Uri((Titlebar.uxThemeSelector.SelectedItem as ComboBoxItem).Tag.ToString(), UriKind.Relative));
         }
 
@@ -129,27 +133,19 @@ namespace Groestlcoin_VanityGen_UI {
         #region Private Methods
 
         private bool CheckFileExistance() {
-            var filesFound = File.Exists(Home + @"\ProgFiles\vanitygen.exe");
+            var filesFound = File.Exists(Home + @"\ProgFiles\VanitySearch.exe");
 
-            if (!File.Exists(Home + @"\ProgFiles\oclvanitygen.exe")) {
-                filesFound = false;
-            }
-            if (!File.Exists(Home + @"\ProgFiles\keyconv.exe")) {
-                filesFound = false;
-            }
-            if (!File.Exists(Home + @"\ProgFiles\calc_addrs.cl")) {
-                filesFound = false;
-            }
+
             if (filesFound) {
                 Dispatcher.Invoke(() => {
                     uxFileWatchBtn.BadgeBackground = Brushes.Green;
-                    uxFileWatchBtn.Badge = "VanityGen Files Found";
+                    uxFileWatchBtn.Badge = "EasyVanity Files Found";
                 });
             }
             else {
                 Dispatcher.Invoke(() => {
                     uxFileWatchBtn.BadgeBackground = Brushes.Red;
-                    uxFileWatchBtn.Badge = "VanityGen Files Not Found";
+                    uxFileWatchBtn.Badge = "EasyVanity Files Not Found";
                 });
             }
             return filesFound;
@@ -192,10 +188,13 @@ namespace Groestlcoin_VanityGen_UI {
         private void SetSettings() {
             var sb = new StringBuilder();
 
-            sb.Append("-v");
-
-            if (uxCaseOptChk.IsChecked == false) sb.Append(" -i");
-            if (uxKeepFindingOptChk.IsChecked == true) sb.Append(" -k");
+            if (uxCaseOptChk.IsChecked == true)
+                sb.Append(" -c");
+            if (uxKeepFindingOptChk.IsChecked == false)
+                sb.Append(" -stop");
+            if (uxHwSelect.IsPressed) {
+                sb.Append(" -gpu");
+            }
             if (uxOutputKeysChk.IsChecked == true) {
                 var dlg = new SaveFileDialog();
                 dlg.DefaultExt = ".txt";
@@ -232,6 +231,21 @@ namespace Groestlcoin_VanityGen_UI {
             if (!string.IsNullOrEmpty(OutputText)) {
                 OutputText += OutputText + Environment.NewLine;
             }
+            Dispatcher.Invoke(() => uxOutputTxt.Text += outputLine + Environment.NewLine);
+            var addressType = "p2pkh";
+
+            Dispatcher.Invoke(() => {
+                if (uxPubKeyTxt.Text.StartsWith("grs1")) {
+                    addressType = "p2wpkh";
+                }
+                else if (uxPubKeyTxt.Text.StartsWith("3")) {
+                    addressType = "p2wpkh-p2sh";
+                }
+            });
+            if (!outputLine.Contains("Pub Addr: ") && !outputLine.Contains($"Priv (WIF): {addressType}")) {
+                return;
+            }
+
 
             var outputLineSplit = outputLine.Split(new[] { '[', ']' }, StringSplitOptions.RemoveEmptyEntries);
 
@@ -242,24 +256,24 @@ namespace Groestlcoin_VanityGen_UI {
                     uxProbLbl.Text = outputLineSplit[3];
                 });
             }
-
-            if (outputLine.Contains("Address: ")) {
-                PublicKey = outputLine.Replace("Address: ", "");
+            if (outputLine.Contains("Pub Addr: ")) {
+                PublicKey = outputLine.Replace("Pub Addr: ", "");
                 Dispatcher.Invoke(() => uxPubKeyTxt.Text = PublicKey);
             }
-            else if (outputLine.Contains("Privkey: ")) {
-                PrivateKey = outputLine.Replace("Privkey: ", "");
+            else if (outputLine.Contains($"Priv (WIF): {addressType}:")) {
+                PrivateKey = outputLine.Replace($"Priv (WIF): {addressType}:", "");
                 Dispatcher.Invoke(() => {
                     uxPrivKeyTxt.Text = PrivateKey;
                     uxSecretPrivKey.Password = PrivateKey;
                 });
             }
-            Dispatcher.Invoke(() => uxOutputTxt.Text += outputLine + Environment.NewLine);
+
         }
 
         private bool TextAllowed(string s) {
             foreach (var c in s) {
-                if (char.IsLetterOrDigit(c) || char.IsControl(c)) continue;
+                if (char.IsLetterOrDigit(c) || char.IsControl(c))
+                    continue;
                 return false;
             }
             return true;
@@ -307,7 +321,8 @@ namespace Groestlcoin_VanityGen_UI {
 
         private void UxPhraseTxt_OnPasting(object sender, DataObjectPastingEventArgs e) {
             var s = (string)e.DataObject.GetData(typeof(string));
-            if (!TextAllowed(s)) e.CancelCommand();
+            if (!TextAllowed(s))
+                e.CancelCommand();
         }
 
         private void UxPhraseTxt_OnPreviewTextInput(object sender, TextCompositionEventArgs e) {
@@ -343,32 +358,57 @@ namespace Groestlcoin_VanityGen_UI {
 
         private void UxStopStartBtn_OnClick(object sender, RoutedEventArgs e) {
             if (!CheckFileExistance()) {
-                DialogHelper.ShowOKDialog(DH, $@"Unable to start VanityGen. Please check that the VanityGen files exist in the installation directory and try again.{Environment.NewLine}{Environment.NewLine}The VanityGen files can be found here:{Environment.NewLine}https://github.com/Groestlcoin/vanitygen/releases");
+                DialogHelper.ShowOKDialog(DH, $"Unable to start VanityGen. Please check that the VanitySearch files exist in the installation directory and try again.{Environment.NewLine}{Environment.NewLine}The VanitySearch files can be found here:{Environment.NewLine}https://github.com/Groestlcoin/VanitySearch/releases");
             }
 
             if (!string.IsNullOrEmpty(uxPhraseTxt.Text)) {
                 var illegalChar = string.Empty;
                 var legalReplacement = string.Empty;
-
                 var validChars = new[] { "W", "X", "Y", "Z" };
                 var firstCharacter = uxPhraseTxt.Text[0];
+                if (uxPrefix.Text.StartsWith("F") || uxPrefix.Text.StartsWith("3")) {
+                    var phrase = uxPrefix.Text + uxPhraseTxt.Text;
 
-                if (uxPhraseTxt.Text.Contains("0")) {
-                    illegalChar = "0";
-                    legalReplacement = "o";
+                    if (phrase.StartsWith("3"))
+                    {
+                        phrase = phrase.ToLower();
+                    }
+                    validChars = new[] { "W", "X", "Y", "Z" };
+                    if (phrase.Contains("0")) {
+                        illegalChar = "0";
+                        legalReplacement = "o";
+                    }
+                    else if (phrase.Contains("O")) {
+                        illegalChar = "O";
+                        legalReplacement = "o";
+                    }
+                    else if (phrase.Contains("I")) {
+                        illegalChar = "I";
+                        legalReplacement = "i";
+                    }
+                    else if (phrase.Contains("l")) {
+                        illegalChar = "l";
+                        legalReplacement = "L";
+                    }
                 }
-                else if (uxPhraseTxt.Text.Contains("O")) {
-                    illegalChar = "O";
-                    legalReplacement = "o";
+                else if (uxPrefix.Text.StartsWith("grs1")) {
+                    var lowerPhrase = uxPhraseTxt.Text.ToLower();
+                    if (lowerPhrase.Contains("o")) {
+                        illegalChar = "o";
+                        legalReplacement = "0";
+                    }
+                    if (lowerPhrase.Contains("1")) {
+                        illegalChar = "1";
+                        legalReplacement = "l";
+                    }
+                    if (lowerPhrase.Contains("b")) {
+                        illegalChar = "b";
+                        legalReplacement = "6";
+                    }
                 }
-                else if (uxPhraseTxt.Text.Contains("I")) {
-                    illegalChar = "I";
-                    legalReplacement = "i";
-                }
-                else if (uxPhraseTxt.Text.Contains("l")) {
-                    illegalChar = "l";
-                    legalReplacement = "L";
-                }
+
+
+
                 //If the case sensitive option is checked, check to see if the first character is a valid uppercase character (WXYZ)
                 else if (uxCaseOptChk.IsChecked == true || char.IsNumber(firstCharacter)) {
                     if (!char.IsLower(firstCharacter)) {
@@ -388,12 +428,7 @@ namespace Groestlcoin_VanityGen_UI {
                 KillProcesses();
             }
             else {
-                if (uxHwSelect.IsPressed) {
-                    CMDFile = "oclvanitygen.exe";
-                }
-                else if (!uxHwSelect.IsPressed) {
-                    CMDFile = "vanitygen.exe";
-                }
+                CMDFile = "VanitySearch.exe";
             }
             SetSettings();
         }
@@ -418,7 +453,8 @@ namespace Groestlcoin_VanityGen_UI {
                 using (var errorWaitHandle = new AutoResetEvent(false)) {
                     process.OutputDataReceived += (s, e) => {
                         if (e.Data == null) {
-                            if (outputWaitHandle != null) outputWaitHandle.Set();
+                            if (outputWaitHandle != null)
+                                outputWaitHandle.Set();
                         }
                         else {
                             SetText(e.Data);
@@ -426,7 +462,7 @@ namespace Groestlcoin_VanityGen_UI {
                     };
                     process.ErrorDataReceived += (s, e) => {
                         if (e.Data == null) {
-                            if (errorWaitHandle != null) errorWaitHandle.Set();
+                            errorWaitHandle.Set();
                         }
                         else {
                             SetText(e.Data);
@@ -437,7 +473,8 @@ namespace Groestlcoin_VanityGen_UI {
 
                     Dispatcher.Invoke(() => {
                         phrase = uxPhraseTxt.Text;
-                        if (uxHwSelect.IsPressed == false) phrase = "F" + phrase;
+                        if (uxHwSelect.IsPressed == false)
+                            phrase = ((ComboBoxItem)uxPrefix.SelectedItem).Content + phrase;
                     });
 
                     process.Start();
@@ -466,5 +503,18 @@ namespace Groestlcoin_VanityGen_UI {
         }
 
         #endregion Private Methods
+
+        private void UxPrefix_OnSelectionChanged(object sender, SelectionChangedEventArgs e) {
+            ComboBoxItem item = (ComboBoxItem)uxPrefix.SelectedItem;
+            if (uxCaseOptChk != null) {
+                if (uxPrefix != null && !item.Content.ToString().StartsWith("F")) {
+                    uxCaseOptChk.IsChecked = false;
+                    uxCaseOptChk.IsEnabled = false;
+                }
+                else {
+                    uxCaseOptChk.IsEnabled = true;
+                }
+            }
+        }
     }
 }
